@@ -2,8 +2,12 @@
 
 :commit: https://github.com/ixti/sidekiq-throttled/commit
 
-== 1.0.0 (unreleased)
+== 0.18.0
 
+* Drop support of Sidekiq < 7 ({commit}/f82d980[f82d980])
+* Rework Fetch for compatibility with Sidekiq 7 (inherit from Sidekiq::BasicFetch)
+
+== 0.17.0
 === Breaking Changes
 
 * Drop support of Sidekiq < 6.4.0 ({commit}/f82d980[f82d980])

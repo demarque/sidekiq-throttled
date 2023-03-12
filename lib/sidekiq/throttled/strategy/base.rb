@@ -10,6 +10,19 @@ module Sidekiq
 
         private
 
+        def eval_script(script, keys, argv)
+          Sidekiq.redis do |conn|
+            begin
+              conn.call('EVALSHA', script.digest, 1, keys, argv)
+            rescue RedisClient::CommandError => e
+              raise unless e.message.include?('NOSCRIPT')
+
+              conn.call('SCRIPT', 'LOAD', script.source)
+              conn.call('EVALSHA', script.digest, 1, keys, argv)
+            end
+          end
+        end
+
         def key(job_args)
           key = @base_key.dup
           return key unless @key_suffix

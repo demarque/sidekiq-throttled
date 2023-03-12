@@ -3,6 +3,7 @@
 require "securerandom"
 
 require "sidekiq/testing"
+require "support/logging"
 
 module JidGenerator
   def jid
@@ -10,12 +11,13 @@ module JidGenerator
   end
 end
 
-configure_redis = proc do |config|
+configure_sidekiq = proc do |config|
+  config.logger = PseudoLogger.instance
   config.redis = { :url => "redis://localhost/15" }
 end
 
-Sidekiq.configure_server(&configure_redis)
-Sidekiq.configure_client(&configure_redis)
+Sidekiq.configure_server(&configure_sidekiq)
+Sidekiq.configure_client(&configure_sidekiq)
 
 require "sidekiq/web"
 Sidekiq::Web.use Rack::Session::Cookie, :secret => SecureRandom.hex(32), :same_site => true, :max_age => 86_400

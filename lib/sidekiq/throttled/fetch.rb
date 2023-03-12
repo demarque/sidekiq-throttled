@@ -1,19 +1,34 @@
 # frozen_string_literal: true
 
 require "sidekiq"
+require "sidekiq/fetch"
 require "sidekiq/throttled/expirable_list"
-require "sidekiq/throttled/fetch/unit_of_work"
-require "sidekiq/throttled/queue_name"
 
 module Sidekiq
   module Throttled
     # Throttled fetch strategy.
-    #
-    # @private
-    class Fetch
-      # Timeout to sleep between fetch retries in case of no job received,
-      # as well as timeout to wait for redis to give us something to work.
-      TIMEOUT = 2
+    # TODO?: replace custom fetcher by a server middleware that reschedules the job?
+    class Fetch < Sidekiq::BasicFetch
+      module UnitOfWorkThrottling
+        # Pushes job back to the head of the queue, so that job won't be tried
+        # immediately after it was requeued (in most cases).
+        #
+        # @note This is triggered when job is throttled. So it is same operation
+        #   Sidekiq performs upon `Sidekiq::Worker.perform_async` call.
+        #
+        # @return [void]
+        def requeue_throttled
+          config.redis { |conn| conn.lpush(queue, job) }
+        end
+
+        # Tells whenever job should be pushed back to queue (throttled) or not.
+        #
+        # @see Sidekiq::Throttled.throttled?
+        # @return [Boolean]
+        def throttled?
+          Throttled.throttled?(job)
+        end
+      end
 
       # Initializes fetcher instance.
       # @param options [Hash]
@@ -22,72 +37,32 @@ module Sidekiq
       #   throttled job.
       # @option options [Boolean] :strict (false)
       # @option options [Array<#to_s>] :queue
-      def initialize(options)
-        @paused = ExpirableList.new(options.fetch(:throttled_queue_cooldown, TIMEOUT))
-
-        @strict = options.fetch(:strict, false)
-        @queues = options.fetch(:queues).map { |q| QueueName.expand q }
-
-        raise ArgumentError, "empty :queues" if @queues.empty?
-
-        @queues.uniq! if @strict
+      def initialize(capsule)
+        super
+        @paused = ExpirableList.new(capsule.config.fetch(:throttled_queue_cooldown, TIMEOUT))
       end
 
       # Retrieves job from redis.
       #
       # @return [Sidekiq::Throttled::UnitOfWork, nil]
       def retrieve_work
-        work = brpop
-        return unless work
+        work = super
 
-        work = UnitOfWork.new(*work)
-        return work unless work.throttled?
-
-        work.requeue_throttled
-        @paused << QueueName.expand(work.queue_name)
-
-        nil
-      end
-
-      def bulk_requeue(units, _options)
-        return if units.empty?
-
-        Sidekiq.logger.debug { "Re-queueing terminated jobs" }
-        Sidekiq.redis do |conn|
-          conn.pipelined do |pipeline|
-            units.each { |unit| unit.requeue(pipeline) }
-          end
+        # Basically just requeuing throttled job and pausing the queue
+        if work&.throttled?
+          work.requeue_throttled
+          @paused << work.queue
+          nil
+        else
+          work
         end
-        Sidekiq.logger.info("Pushed #{units.size} jobs back to Redis")
-      rescue => e
-        Sidekiq.logger.warn("Failed to requeue #{units.size} jobs: #{e}")
       end
 
-      private
-
-      # Tries to pop pair of `queue` and job `message` out of sidekiq queues.
-      #
-      # @see http://redis.io/commands/brpop
-      # @return [Array(String, String), nil]
-      def brpop
-        queues = filter_queues(@strict ? @queues : @queues.shuffle.uniq)
-
-        if queues.empty?
-          sleep TIMEOUT
-          return
-        end
-
-        Sidekiq.redis { |conn| conn.brpop(*queues, :timeout => TIMEOUT) }
-      end
-
-      # Returns list of queues to try to fetch jobs from.
-      #
-      # @note It may return an empty array.
-      # @param [Array<String>] queues
-      # @return [Array<String>]
-      def filter_queues(queues)
-        queues - @paused.to_a
+      def queues_cmd
+        super - @paused.to_a
       end
     end
   end
 end
+
+Sidekiq::BasicFetch::UnitOfWork.include(Sidekiq::Throttled::Fetch::UnitOfWorkThrottling)

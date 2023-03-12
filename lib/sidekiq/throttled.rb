@@ -82,7 +82,8 @@ module Sidekiq
         end
 
         false
-      rescue
+      rescue => e
+        Sidekiq.logger.warn("Failed to check for throttling: #{e}")
         false
       end
 
@@ -95,7 +96,7 @@ module Sidekiq
         # https://github.com/mperham/sidekiq/commit/67daa7a408b214d593100f782271ed108686c147
         sidekiq_config = sidekiq_config.options if Gem::Version.new(Sidekiq::VERSION) < Gem::Version.new("6.5.0")
 
-        sidekiq_config[:fetch] = Sidekiq::Throttled::Fetch.new(sidekiq_config)
+        sidekiq_config[:fetch_class] = Sidekiq::Throttled::Fetch
       end
 
       # Tries to preload constant by it's name once.

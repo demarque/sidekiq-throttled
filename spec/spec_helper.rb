@@ -6,8 +6,6 @@ require "sidekiq/throttled"
 require "sidekiq/throttled/testing"
 
 require "sidekiq_helper"
-
-require "support/logging"
 require "support/timecop"
 
 # See http://rubydoc.info/gems/rspec-core/RSpec/Core/Configuration
